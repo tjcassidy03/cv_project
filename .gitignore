@@ -20,3 +20,6 @@ venv/
 Thumbs.db
 
 *.pt
+
+*.jpg
+*.png
