@@ -26,4 +26,5 @@ Thumbs.db
 
 # Ignore Signboard text dataset files/folders
 *.json
+*.csv
 images/
