@@ -16,4 +16,5 @@ for (bbox, text, prob) in results:
 
     cv2.putText(image, text, (x_min, y_min - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+print([result[1] for result in results])
 cv2.imwrite("output.jpg", image)
