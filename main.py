@@ -122,7 +122,7 @@ for (x1, y1, x2, y2, text) in recognized_texts:
     cv2.rectangle(original_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
     cv2.putText(original_img, text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-print(recognized_texts)
+print([text[-1] for text in recognized_texts])
 plt.figure(figsize=(15, 10))
 plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
 plt.title("Detected Text")
