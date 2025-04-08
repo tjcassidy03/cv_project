@@ -6,12 +6,23 @@ import easyocr
 
 from east import EastModel, input_size
 
+def preprocess_image(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    preprocessed = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    return preprocessed
+
 def resize_with_padding(image, target_size):
-    h, w, _ = image.shape
+    if len(image.shape) == 2:  # Single-channel image
+        h, w = image.shape
+        padded_img = np.zeros((target_size, target_size), dtype=np.uint8)
+    else:  # Three-channel image
+        h, w, _ = image.shape
+        padded_img = np.zeros((target_size, target_size, 3), dtype=np.uint8)
+    
     scale = min(target_size / w, target_size / h)
     new_w, new_h = int(w * scale), int(h * scale)
     resized_img = cv2.resize(image, (new_w, new_h))
-    padded_img = np.zeros((target_size, target_size, 3), dtype=np.uint8)
     top = (target_size - new_h) // 2
     left = (target_size - new_w) // 2
     padded_img[top:top+new_h, left:left+new_w] = resized_img
@@ -67,7 +78,16 @@ model.eval()
 img_path = 'img18.jpg'
 original_img = cv2.imread(img_path)
 
-img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(original_img, input_size)
+# Preprocess the image
+# preprocessed_img = preprocess_image(original_img)
+
+# plt.figure(figsize=(10, 6))
+# plt.imshow(preprocessed_img, cmap='gray')
+# plt.title("Preprocessed Image")
+# plt.show()
+
+
+img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
 img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
 img_normalized = img_rgb.astype(np.float32) / 255.0
 img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
