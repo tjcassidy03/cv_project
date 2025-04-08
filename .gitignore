@@ -23,3 +23,7 @@ Thumbs.db
 
 *.jpg
 *.png
+
+# Ignore Signboard text dataset files/folders
+*.json
+images/
