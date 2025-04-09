@@ -93,8 +93,8 @@ with open('signboardTranscriptions.csv', mode='r', encoding='utf-8') as file:
         else:
             transcriptions_hashmap[image_id] = transcription_list
 
-for image_id, transcriptions in transcriptions_hashmap.items():
-    print(f"{image_id}: {transcriptions}")
+# for image_id, transcriptions in transcriptions_hashmap.items():
+#     print(f"{image_id}: {transcriptions}")
 
 # Place images folder in root directory
 img_path = './images/vietsignboard/baker-1.jpg'
@@ -132,7 +132,7 @@ for x1, y1, x2, y2 in nms_boxes:
     y2 = int((y2 - top_pad) / scale)
     scaled_boxes.append((x1, y1, x2, y2))
 
-reader = easyocr.Reader(['en'])
+reader = easyocr.Reader(['en', 'vi', 'es'])
 recognized_texts = []
 for (x1, y1, x2, y2) in scaled_boxes:
     text_roi = original_img[y1:y2, x1:x2]

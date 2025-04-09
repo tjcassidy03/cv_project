@@ -4,7 +4,7 @@ import easyocr
 img_path = 'img18.jpg'
 image = cv2.imread(img_path)
 
-reader = easyocr.Reader(['en'])
+reader = easyocr.Reader(['en', 'vi', 'es'])
 results = reader.readtext(img_path)
 
 for (bbox, text, prob) in results:
