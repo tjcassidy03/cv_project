@@ -53,5 +53,5 @@ class CRAFTTextDetector:
             output_dir=self.output_dir
         )
 
-        empty_cuda_cache()
+        # empty_cuda_cache()
 
