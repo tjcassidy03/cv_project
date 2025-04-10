@@ -80,44 +80,46 @@ model_data = torch.load("east.pt", map_location=torch.device("cpu"))
 model.load_state_dict(model_data)
 model.eval()
 
-# Create Transcriptions Hash Map
+# Create Transcriptions and Border Box Hash Map
 import csv
-transcriptions_hashmap = {}
+transcriptions_and_bbox_hashmap = {}
 
 with open('signboardTranscriptions.csv', mode='r', encoding='utf-8') as file:
     reader = csv.reader(file)
-    next(reader) 
+    next(reader)  
+
     for row in reader:
-        image_id = row[0]  
-        transcription = row[1]  
-        
-        transcription_list = transcription.split(" | ")
-        
-        if image_id in transcriptions_hashmap:
-            transcriptions_hashmap[image_id].extend(transcription_list)
+        image_id = row[0]
+        transcription = row[1]
+        bbox_str = row[2]
+
+        bbox = [int(x.strip()) for x in bbox_str.strip('[]').split(',')] if bbox_str else []
+
+        entry = {
+            "transcription": transcription,
+            "bbox": bbox
+        }
+
+        if image_id in transcriptions_and_bbox_hashmap:
+            transcriptions_and_bbox_hashmap[image_id].append(entry)
         else:
-            transcriptions_hashmap[image_id] = transcription_list
+            transcriptions_and_bbox_hashmap[image_id] = [entry]
 
-# for image_id, transcriptions in transcriptions_hashmap.items():
-#     print(f"{image_id}: {transcriptions}")
+for image_id, entries in transcriptions_and_bbox_hashmap.items():
+    print(f"{image_id}:")
+    for entry in entries:
+        print(f"  Transcription: {entry['transcription']}, BBox: {entry['bbox']}")
 
-all_files = True
+all_files = False
 
 if not all_files:
-    # Place images folder in root directory
-    img_path = './images/vietsignboard/baker-1.jpg'
+    img_path = './images/vietsignboard/baker-2.jpg'
+    path_key = img_path.split('./images/')[1]
     original_img = cv2.imread(img_path)
 
-    # Preprocess the image
     preprocessed_img = preprocess_image(original_img)
-
-    # plt.figure(figsize=(10, 6))
-    # plt.imshow(preprocessed_img, cmap='gray')
-    # plt.title("Preprocessed Image")
-    # plt.show()
-
-
     img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
+
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
     img_normalized = img_rgb.astype(np.float32) / 255.0
     img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
@@ -131,7 +133,6 @@ if not all_files:
     boxes, scores = decode_bounding_boxes(score_np, geo_np)
     nms_boxes = non_maximum_suppression(boxes, scores)
 
-    # get back to original shape
     scaled_boxes = []
     for x1, y1, x2, y2 in nms_boxes:
         x1 = int((x1 - left_pad) / scale)
@@ -149,191 +150,221 @@ if not all_files:
         if result:
             recognized_texts.append((x1, y1, x2, y2, result[0]))
 
+    print(f"\nImage: {path_key}")
+    print("OCR Detected Boxes:")
     for (x1, y1, x2, y2, text) in recognized_texts:
-        cv2.rectangle(original_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(original_img, text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        print(f"  Text: {text} | BBox: ({x1}, {y1}, {x2}, {y2})")
 
-    # Get actual image annotations
+    print("\nGround Truth Boxes:")
+    for entry in transcriptions_and_bbox_hashmap.get(path_key, []):
+        print(f"  Text: {entry['transcription']} | BBox: {entry['bbox']}")
 
-    img_annotations = [text[-1] for text in recognized_texts]
-    img_annotations = list(itertools.chain(*[element.split() if ' ' in element else [element] for element in img_annotations]))
+    import unicodedata
+    def normalize_text(text):
+        text = text.lower().strip()
+        text = unicodedata.normalize('NFD', text)
+        text = "".join([ch for ch in text if not unicodedata.combining(ch)])
+        text = text.translate(str.maketrans('', '', ",.:;'()[]{}!?\""))
+        return text
 
-    path = img_path.split('./images/')[1]
-    actual_annotations = transcriptions_hashmap[path]
-    actual_annotations = list(itertools.chain(*[element.split() if ' ' in element else [element] for element in actual_annotations]))
+    ocr_words_raw = list(itertools.chain(*[text.split() for (_, _, _, _, text) in recognized_texts]))
+    gt_entries = transcriptions_and_bbox_hashmap.get(path_key, [])
+    gt_words_raw = list(itertools.chain(*[entry["transcription"].split() for entry in gt_entries]))
 
-    print(img_annotations)
-    print(actual_annotations)
+    ocr_words = [normalize_text(word) for word in ocr_words_raw]
+    gt_words = [normalize_text(word) for word in gt_words_raw]
 
-    # Calculate Accuracy and Partial Accuracy
-    correct_count = 0
-    total_count = len(actual_annotations)
+    print("\nNormalized OCR Words:", ocr_words)
+    print("Normalized Ground Truth Words:", gt_words)
+
+    exact_matches = [(gt, ocr) for gt in gt_words for ocr in ocr_words if gt == ocr]
+    print("Exact Word Matches:", exact_matches)
+
+    correct_count = sum(1 for word in gt_words if word in ocr_words)
+    total_count = len(gt_words)
+    total_characters = sum(len(word) for word in gt_words)
+
     partial_correct_characters = 0
-    total_characters = 0
+    used = [False] * len(ocr_words)
+    for gt_word in gt_words:
+        for i, ocr_word in enumerate(ocr_words):
+            if used[i]:
+                continue
+            match = difflib.SequenceMatcher(None, gt_word, ocr_word).find_longest_match(0, len(gt_word), 0, len(ocr_word)).size
+            partial_correct_characters += match
+            if match > 0:
+                used[i] = True
+                break
 
-    used_recognized = [False] * len(img_annotations)
+    accuracy = (correct_count / total_count) * 100 if total_count else 0
+    partial_accuracy = (partial_correct_characters / total_characters) * 100 if total_characters else 0
 
-    for annotation in actual_annotations:
-        total_characters += len(annotation)
-        if annotation in img_annotations:
-            correct_count += 1
+    print(f"\nExact Accuracy: {accuracy:.2f}%")
+    print(f"Partial Character Accuracy: {partial_accuracy:.2f}%")
 
-        for i, recognized in enumerate(img_annotations):
-            if used_recognized[i]:
-                continue  
-            seq_match = difflib.SequenceMatcher(None, annotation, recognized)
-            match_length = seq_match.find_longest_match(0, len(annotation), 0, len(recognized)).size
-            partial_correct_characters += match_length
+    def calculate_cer(ref_words, pred_words):
+        return Levenshtein.distance("".join(ref_words), "".join(pred_words)) / max(len("".join(ref_words)), 1)
 
-            if match_length > 0:
-                used_recognized[i] = True
+    def calculate_wer(ref_words, pred_words):
+        return Levenshtein.distance(ref_words, pred_words) / max(len(ref_words), 1)
 
-    accuracy = (correct_count / total_count) * 100 if total_count > 0 else 0
-    partial_accuracy = (partial_correct_characters / total_characters) * 100 if total_characters > 0 else 0
+    cer = calculate_cer(gt_words, ocr_words)
+    wer = calculate_wer(gt_words, ocr_words)
 
-    print(f"Exact Accuracy: {accuracy:.2f}%")
-    print(f"Partial Accuracy (based on characters): {partial_accuracy:.2f}%")
-
-    # Calculate CER and WER
-    def calculate_cer(reference, recognized):
-        reference_str = "".join(reference)
-        recognized_str = "".join(recognized)
-        
-        if len(reference_str) == 0:
-            return 0
-        
-        lev_distance = Levenshtein.distance(reference_str, recognized_str)
-        cer = lev_distance / len(reference_str)
-        return cer
-
-    def calculate_wer(reference, recognized):
-        reference_str = " ".join(reference)
-        recognized_str = " ".join(recognized)
-        
-        if len(reference_str.split()) == 0:
-            return 0
-        
-        lev_distance = Levenshtein.distance(reference_str.split(), recognized_str.split())
-        
-        wer = lev_distance / len(reference_str.split())
-        return wer
-
-    cer = calculate_cer(img_annotations, actual_annotations)
-    wer = calculate_wer(img_annotations, actual_annotations)
     print(f"Character Error Rate (CER): {cer * 100:.2f}%")
     print(f"Word Error Rate (WER): {wer * 100:.2f}%")
 
-    # plt.figure(figsize=(15, 10))
-    # plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
-    # plt.title("Detected Text")
-    # plt.show()
+    def compute_iou(boxA, boxB):
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+        interArea = max(0, xB - xA) * max(0, yB - yA)
+        if interArea == 0:
+            return 0.0
+        boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        return interArea / float(boxAArea + boxBArea - interArea)
 
-    # cv2.imwrite("text_detection_result.png", original_img)
-    # cv2.imshow("Detected Text", original_img)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+    gt_boxes_raw = [entry['bbox'] for entry in gt_entries]
+    gt_boxes = [(x, y, x + w, y + h) for (x, y, w, h) in gt_boxes_raw]
+    pred_boxes = [(x1, y1, x2, y2) for (x1, y1, x2, y2, _) in recognized_texts]
 
-elif all_files:
-    folder_path = './images/vietsignboard'
-    image_paths = [path.replace('\\', '/') for path in glob(os.path.join(folder_path, '*.jpg'))]
+    matched_gt, matched_pred = set(), set()
+    threshold = 0.1
 
-    all_metrics = []
-    for img_path in image_paths:
-        original_img = cv2.imread(img_path)
-        preprocessed_img = preprocess_image(original_img)
-        img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
-        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-        img_normalized = img_rgb.astype(np.float32) / 255.0
-        img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
+    for i, pred_box in enumerate(pred_boxes):
+        best_iou = 0
+        best_gt_idx = -1
+        for j, gt_box in enumerate(gt_boxes):
+            if j in matched_gt:
+                continue
+            iou = compute_iou(pred_box, gt_box)
+            if iou > best_iou:
+                best_iou = iou
+                best_gt_idx = j
+        if best_iou >= threshold:
+            matched_gt.add(best_gt_idx)
+            matched_pred.add(i)
 
-        with torch.no_grad():
-            score, geo = model(img_tensor)
+    TP = len(matched_pred)
+    FP = len(pred_boxes) - TP
+    FN = len(gt_boxes) - TP
 
-        score_np = score.squeeze().cpu().numpy()
-        geo_np = geo.squeeze().cpu().numpy()
-        boxes, scores = decode_bounding_boxes(score_np, geo_np)
-        nms_boxes = non_maximum_suppression(boxes, scores)
+    precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+    recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+    hmean = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-        scaled_boxes = []
-        for x1, y1, x2, y2 in nms_boxes:
-            x1 = int((x1 - left_pad) / scale)
-            y1 = int((y1 - top_pad) / scale)
-            x2 = int((x2 - left_pad) / scale)
-            y2 = int((y2 - top_pad) / scale)
-            scaled_boxes.append((x1, y1, x2, y2))
+    print("\n--- IoU Metrics ---")
+    print(f"True Positives: {TP}")
+    print(f"False Positives: {FP}")
+    print(f"False Negatives: {FN}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall: {recall:.4f}")
+    print(f"H-Mean: {hmean:.4f}")
 
-        recognized_texts = []
-        for (x1, y1, x2, y2) in scaled_boxes:
-            text_roi = original_img[y1:y2, x1:x2]
-            reader = easyocr.Reader(['en', 'vi', 'es'], gpu=False, verbose=False)
-            if text_roi is not None and text_roi.size != 0:
-                result = reader.readtext(text_roi, detail=0)
-            if result:
-                recognized_texts.append(result[0])
 
-        img_annotations = list(itertools.chain(*[text.split() for text in recognized_texts]))
+# elif all_files:
+#     folder_path = './images/vietsignboard'
+#     image_paths = [path.replace('\\', '/') for path in glob(os.path.join(folder_path, '*.jpg'))]
 
-        path_key = img_path.split('./images/')[1]
-        actual_annotations = transcriptions_hashmap.get(path_key, [])
-        actual_annotations = list(itertools.chain(*[text.split() for text in actual_annotations]))
+#     all_metrics = []
+#     for img_path in image_paths:
+#         original_img = cv2.imread(img_path)
+#         preprocessed_img = preprocess_image(original_img)
+#         img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
+#         img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+#         img_normalized = img_rgb.astype(np.float32) / 255.0
+#         img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
 
-        correct_count = 0
-        total_count = len(actual_annotations)
-        partial_correct_characters = 0
-        total_characters = 0
-        used_recognized = [False] * len(img_annotations)
+#         with torch.no_grad():
+#             score, geo = model(img_tensor)
 
-        for annotation in actual_annotations:
-            total_characters += len(annotation)
-            if annotation in img_annotations:
-                correct_count += 1
+#         score_np = score.squeeze().cpu().numpy()
+#         geo_np = geo.squeeze().cpu().numpy()
+#         boxes, scores = decode_bounding_boxes(score_np, geo_np)
+#         nms_boxes = non_maximum_suppression(boxes, scores)
 
-            for i, recognized in enumerate(img_annotations):
-                if used_recognized[i]:
-                    continue
-                seq_match = difflib.SequenceMatcher(None, annotation, recognized)
-                match_length = seq_match.find_longest_match(0, len(annotation), 0, len(recognized)).size
-                partial_correct_characters += match_length
-                if match_length > 0:
-                    used_recognized[i] = True
+#         scaled_boxes = []
+#         for x1, y1, x2, y2 in nms_boxes:
+#             x1 = int((x1 - left_pad) / scale)
+#             y1 = int((y1 - top_pad) / scale)
+#             x2 = int((x2 - left_pad) / scale)
+#             y2 = int((y2 - top_pad) / scale)
+#             scaled_boxes.append((x1, y1, x2, y2))
 
-        accuracy = (correct_count / total_count) * 100 if total_count > 0 else 0
-        partial_accuracy = (partial_correct_characters / total_characters) * 100 if total_characters > 0 else 0
+#         recognized_texts = []
+#         for (x1, y1, x2, y2) in scaled_boxes:
+#             text_roi = original_img[y1:y2, x1:x2]
+#             reader = easyocr.Reader(['en', 'vi', 'es'], gpu=False, verbose=False)
+#             if text_roi is not None and text_roi.size != 0:
+#                 result = reader.readtext(text_roi, detail=0)
+#             if result:
+#                 recognized_texts.append(result[0])
 
-        # CER and WER functions
-        def calculate_cer(reference, recognized):
-            reference_str = "".join(reference)
-            recognized_str = "".join(recognized)
-            if len(reference_str) == 0:
-                return 0
-            lev_distance = Levenshtein.distance(reference_str, recognized_str)
-            return lev_distance / len(reference_str)
+#         img_annotations = list(itertools.chain(*[text.split() for text in recognized_texts]))
 
-        def calculate_wer(reference, recognized):
-            if len(reference) == 0:
-                return 0
-            lev_distance = Levenshtein.distance(reference, recognized)
-            return lev_distance / len(reference)
+#         path_key = img_path.split('./images/')[1]
+#         actual_annotations = transcriptions_and_bbox_hashmap.get(path_key, [])
+#         actual_annotations = list(itertools.chain(*[text.split() for text in actual_annotations]))
 
-        cer = calculate_cer(actual_annotations, img_annotations) * 100
-        wer = calculate_wer(actual_annotations, img_annotations) * 100
+#         correct_count = 0
+#         total_count = len(actual_annotations)
+#         partial_correct_characters = 0
+#         total_characters = 0
+#         used_recognized = [False] * len(img_annotations)
 
-        print(f"📄 Image: {os.path.basename(img_path)}")
-        print(f"   🔹 Exact Accuracy: {accuracy:.2f}%")
-        print(f"   🔹 Partial Accuracy: {partial_accuracy:.2f}%")
-        print(f"   🔹 CER: {cer:.2f}%")
-        print(f"   🔹 WER: {wer:.2f}%\n")
+#         for annotation in actual_annotations:
+#             total_characters += len(annotation)
+#             if annotation in img_annotations:
+#                 correct_count += 1
 
-        all_metrics.append((accuracy, partial_accuracy, cer, wer))
+#             for i, recognized in enumerate(img_annotations):
+#                 if used_recognized[i]:
+#                     continue
+#                 seq_match = difflib.SequenceMatcher(None, annotation, recognized)
+#                 match_length = seq_match.find_longest_match(0, len(annotation), 0, len(recognized)).size
+#                 partial_correct_characters += match_length
+#                 if match_length > 0:
+#                     used_recognized[i] = True
 
-    # Calculate averages
-    avg_acc = np.mean([m[0] for m in all_metrics])
-    avg_partial = np.mean([m[1] for m in all_metrics])
-    avg_cer = np.mean([m[2] for m in all_metrics])
-    avg_wer = np.mean([m[3] for m in all_metrics])
+#         accuracy = (correct_count / total_count) * 100 if total_count > 0 else 0
+#         partial_accuracy = (partial_correct_characters / total_characters) * 100 if total_characters > 0 else 0
 
-    print("📊 AVERAGE METRICS ACROSS ALL IMAGES:")
-    print(f"   ✅ Average Exact Accuracy: {avg_acc:.2f}%")
-    print(f"   ✅ Average Partial Accuracy: {avg_partial:.2f}%")
-    print(f"   ✅ Average CER: {avg_cer:.2f}%")
-    print(f"   ✅ Average WER: {avg_wer:.2f}%")
+#         # CER and WER functions
+#         def calculate_cer(reference, recognized):
+#             reference_str = "".join(reference)
+#             recognized_str = "".join(recognized)
+#             if len(reference_str) == 0:
+#                 return 0
+#             lev_distance = Levenshtein.distance(reference_str, recognized_str)
+#             return lev_distance / len(reference_str)
+
+#         def calculate_wer(reference, recognized):
+#             if len(reference) == 0:
+#                 return 0
+#             lev_distance = Levenshtein.distance(reference, recognized)
+#             return lev_distance / len(reference)
+
+#         cer = calculate_cer(actual_annotations, img_annotations) * 100
+#         wer = calculate_wer(actual_annotations, img_annotations) * 100
+
+#         print(f"📄 Image: {os.path.basename(img_path)}")
+#         print(f"   🔹 Exact Accuracy: {accuracy:.2f}%")
+#         print(f"   🔹 Partial Accuracy: {partial_accuracy:.2f}%")
+#         print(f"   🔹 CER: {cer:.2f}%")
+#         print(f"   🔹 WER: {wer:.2f}%\n")
+
+#         all_metrics.append((accuracy, partial_accuracy, cer, wer))
+
+#     # Calculate averages
+#     avg_acc = np.mean([m[0] for m in all_metrics])
+#     avg_partial = np.mean([m[1] for m in all_metrics])
+#     avg_cer = np.mean([m[2] for m in all_metrics])
+#     avg_wer = np.mean([m[3] for m in all_metrics])
+
+#     print("📊 AVERAGE METRICS ACROSS ALL IMAGES:")
+#     print(f"   ✅ Average Exact Accuracy: {avg_acc:.2f}%")
+#     print(f"   ✅ Average Partial Accuracy: {avg_partial:.2f}%")
+#     print(f"   ✅ Average CER: {avg_cer:.2f}%")
+#     print(f"   ✅ Average WER: {avg_wer:.2f}%")
