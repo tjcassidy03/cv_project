@@ -8,6 +8,8 @@ __pycache__/
 venv/
 .env/
 .venv/
+.craft/
+.craft_ocr/
 
 # Ignore logs and temporary files
 *.log
@@ -28,3 +30,4 @@ Thumbs.db
 img/
 test_imgs/
 craft_output/
+angled_test/
