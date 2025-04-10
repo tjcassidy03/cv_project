@@ -1,0 +1,15 @@
+from craft import CRAFTTextDetector
+import os
+
+image_dir = 'test_imgs'
+output_dir = 'craft_output'
+
+bound_types = ['polys', 'boxes']
+
+for img in os.listdir(image_dir):
+    image_path = os.path.join(image_dir, img)
+    print(image_path)
+    for bound in bound_types:
+        out_path = os.path.join(output_dir, os.path.splitext(img)[0], bound)
+        craft_run = CRAFTTextDetector(image_path=image_path, output_dir=out_path,boundary_type=bound)
+        craft_run.run()

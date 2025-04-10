@@ -7,6 +7,7 @@ __pycache__/
 # Ignore virtual environments
 venv/
 .env/
+.venv/
 
 # Ignore logs and temporary files
 *.log
@@ -23,3 +24,7 @@ Thumbs.db
 
 *.jpg
 *.png
+
+img/
+test_imgs/
+craft_output/

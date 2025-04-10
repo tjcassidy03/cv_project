@@ -1,7 +1,7 @@
 import cv2
 import easyocr
 
-img_path = 'img18.jpg'
+img_path = 'img/img63_out/image_crops/crop_1.png'
 image = cv2.imread(img_path)
 
 reader = easyocr.Reader(['en'])
@@ -17,4 +17,4 @@ for (bbox, text, prob) in results:
     cv2.putText(image, text, (x_min, y_min - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
 print([result[1] for result in results])
-cv2.imwrite("output.jpg", image)
+cv2.imwrite("img/output63_crop0.jpg", image)

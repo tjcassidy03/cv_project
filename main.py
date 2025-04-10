@@ -1,9 +1,142 @@
+# import numpy as np
+# import cv2
+# import torch
+# import matplotlib.pyplot as plt
+# import easyocr
+
+# from east import EastModel, input_size
+
+# def preprocess_image(image):
+#     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+#     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+#     preprocessed = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+#     return preprocessed
+
+# def resize_with_padding(image, target_size):
+#     if len(image.shape) == 2:  # Single-channel image
+#         h, w = image.shape
+#         padded_img = np.zeros((target_size, target_size), dtype=np.uint8)
+#     else:  # Three-channel image
+#         h, w, _ = image.shape
+#         padded_img = np.zeros((target_size, target_size, 3), dtype=np.uint8)
+    
+#     scale = min(target_size / w, target_size / h)
+#     new_w, new_h = int(w * scale), int(h * scale)
+#     resized_img = cv2.resize(image, (new_w, new_h))
+#     top = (target_size - new_h) // 2
+#     left = (target_size - new_w) // 2
+#     padded_img[top:top+new_h, left:left+new_w] = resized_img
+#     return padded_img, scale, top, left, new_w, new_h
+
+# def decode_bounding_boxes(score_map, geo_map, score_thresh=0.5):
+#     h, w = score_map.shape
+#     boxes = []
+#     scores = []
+    
+#     for y in range(h):
+#         for x in range(w):
+#             if score_map[y, x] >= score_thresh:
+#                 top, right, bottom, left = geo_map[:4, y, x]
+#                 x1, y1 = x * 4 - left, y * 4 - top
+#                 x2, y2 = x * 4 + right, y * 4 + bottom
+#                 boxes.append([int(x1), int(y1), int(x2), int(y2)])
+#                 scores.append(float(score_map[y, x]))
+    
+#     return np.array(boxes), np.array(scores)
+
+# def non_maximum_suppression(boxes, scores, iou_threshold=0.3):
+#     if len(boxes) == 0:
+#         return []
+    
+#     x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+#     areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+#     indices = np.argsort(scores)[::-1]
+    
+#     keep = []
+#     while len(indices) > 0:
+#         i = indices[0]
+#         keep.append(i)
+#         xx1 = np.maximum(x1[i], x1[indices[1:]])
+#         yy1 = np.maximum(y1[i], y1[indices[1:]])
+#         xx2 = np.minimum(x2[i], x2[indices[1:]])
+#         yy2 = np.minimum(y2[i], y2[indices[1:]])
+        
+#         w = np.maximum(0, xx2 - xx1 + 1)
+#         h = np.maximum(0, yy2 - yy1 + 1)
+#         inter = w * h
+#         iou = inter / (areas[i] + areas[indices[1:]] - inter)
+        
+#         indices = indices[np.where(iou <= iou_threshold)[0] + 1]
+    
+#     return boxes[keep]
+
+# model = EastModel(None)
+# model_data = torch.load("east.pt", map_location=torch.device("cpu"))
+# model.load_state_dict(model_data)
+# model.eval()
+
+# img_path = 'img/img18.jpg'
+# original_img = cv2.imread(img_path)
+
+# preprocessed_img = preprocess_image(original_img)
+
+# plt.figure(figsize=(10, 6))
+# plt.imshow(preprocessed_img, cmap='gray')
+# plt.title("Preprocessed Image")
+# plt.show()
+
+
+# img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
+# img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+# img_normalized = img_rgb.astype(np.float32) / 255.0
+# img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
+
+# with torch.no_grad():
+#     score, geo = model(img_tensor)
+
+# score_np = score.squeeze().cpu().numpy()
+# geo_np = geo.squeeze().cpu().numpy()
+
+# boxes, scores = decode_bounding_boxes(score_np, geo_np)
+# nms_boxes = non_maximum_suppression(boxes, scores)
+
+# # get back to original shape
+# scaled_boxes = []
+# for x1, y1, x2, y2 in nms_boxes:
+#     x1 = int((x1 - left_pad) / scale)
+#     y1 = int((y1 - top_pad) / scale)
+#     x2 = int((x2 - left_pad) / scale)
+#     y2 = int((y2 - top_pad) / scale)
+#     scaled_boxes.append((x1, y1, x2, y2))
+
+# reader = easyocr.Reader(['en'])
+# recognized_texts = []
+# for (x1, y1, x2, y2) in scaled_boxes:
+#     text_roi = original_img[y1:y2, x1:x2]
+#     result = reader.readtext(text_roi, detail=0)
+#     if result:
+#         recognized_texts.append((x1, y1, x2, y2, result[0]))
+
+# for (x1, y1, x2, y2, text) in recognized_texts:
+#     cv2.rectangle(original_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+#     cv2.putText(original_img, text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+# print([text[-1] for text in recognized_texts])
+# plt.figure(figsize=(15, 10))
+# plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
+# plt.title("Detected Text")
+# plt.show()
+
+# # cv2.imwrite("text_detection_result.png", original_img)
+# cv2.imshow("Detected Text", original_img)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
+
 import numpy as np
 import cv2
 import torch
 import matplotlib.pyplot as plt
 import easyocr
-
 from east import EastModel, input_size
 
 def preprocess_image(image):
@@ -13,10 +146,10 @@ def preprocess_image(image):
     return preprocessed
 
 def resize_with_padding(image, target_size):
-    if len(image.shape) == 2:  # Single-channel image
+    if len(image.shape) == 2: 
         h, w = image.shape
         padded_img = np.zeros((target_size, target_size), dtype=np.uint8)
-    else:  # Three-channel image
+    else:  
         h, w, _ = image.shape
         padded_img = np.zeros((target_size, target_size, 3), dtype=np.uint8)
     
@@ -28,23 +161,37 @@ def resize_with_padding(image, target_size):
     padded_img[top:top+new_h, left:left+new_w] = resized_img
     return padded_img, scale, top, left, new_w, new_h
 
-def decode_bounding_boxes(score_map, geo_map, score_thresh=0.5):
+def decode_bounding_boxes(score_map, geo_map, score_thresh=0.5, scale=1.15):
     h, w = score_map.shape
     boxes = []
     scores = []
-    
+
     for y in range(h):
         for x in range(w):
             if score_map[y, x] >= score_thresh:
                 top, right, bottom, left = geo_map[:4, y, x]
                 x1, y1 = x * 4 - left, y * 4 - top
                 x2, y2 = x * 4 + right, y * 4 + bottom
-                boxes.append([int(x1), int(y1), int(x2), int(y2)])
-                scores.append(float(score_map[y, x]))
-    
-    return np.array(boxes), np.array(scores)
 
-def non_maximum_suppression(boxes, scores, iou_threshold=0.3):
+                # Get center, width, height
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                w_box = (x2 - x1) * scale / 2
+                h_box = (y2 - y1) * scale / 2
+
+                # Expand box by 10%
+                new_x1 = int(cx - w_box)
+                new_y1 = int(cy - h_box)
+                new_x2 = int(cx + w_box)
+                new_y2 = int(cy + h_box)
+
+                boxes.append([new_x1, new_y1, new_x2, new_y2])
+                scores.append(float(score_map[y, x]))
+
+    return np.array(boxes) if boxes else np.array([]), np.array(scores)
+
+
+def non_maximum_suppression(boxes, scores, iou_threshold=0.2):
     if len(boxes) == 0:
         return []
     
@@ -56,6 +203,10 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.3):
     while len(indices) > 0:
         i = indices[0]
         keep.append(i)
+        
+        if len(indices) == 1:
+            break
+            
         xx1 = np.maximum(x1[i], x1[indices[1:]])
         yy1 = np.maximum(y1[i], y1[indices[1:]])
         xx2 = np.minimum(x2[i], x2[indices[1:]])
@@ -70,65 +221,141 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.3):
     
     return boxes[keep]
 
-model = EastModel(None)
-model_data = torch.load("east.pt", map_location=torch.device("cpu"))
-model.load_state_dict(model_data)
-model.eval()
+def display_roi_images(image, boxes, title="ROI Images"):
+    if not boxes:
+        print("No ROIs detected")
+        return
 
-img_path = 'img18.jpg'
-original_img = cv2.imread(img_path)
+    n_images = len(boxes)
+    grid_size = int(np.ceil(np.sqrt(n_images)))
+    fig, axes = plt.subplots(grid_size, grid_size, figsize=(15, 15))
+    axes = axes.flatten() if n_images > 1 else [axes]
+    
+    for i, (x1, y1, x2, y2) in enumerate(boxes):
+        if i < len(axes):
+            roi = image[y1:y2, x1:x2]
+            if roi.size == 0:  
+                continue
+                
+            axes[i].imshow(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+            axes[i].set_title(f"ROI #{i+1}: [{x1}, {y1}, {x2}, {y2}]")
+            axes[i].axis('off')
+    
+    for i in range(n_images, len(axes)):
+        axes[i].axis('off')
+    
+    plt.suptitle(title)
+    plt.tight_layout()
+    plt.show()
 
-# Preprocess the image
-# preprocessed_img = preprocess_image(original_img)
+def process_image(img_path, use_preprocessing=False, show_rois=False):
+    model = EastModel(None)
+    model_data = torch.load("east.pt", map_location=torch.device("cpu"))
+    model.load_state_dict(model_data)
+    model.eval()
+    
+    original_img = cv2.imread(img_path)
+    if original_img is None:
+        raise ValueError(f"Could not read image at {img_path}")
+    
+    if use_preprocessing:
+        processed_img = preprocess_image(original_img)
+        plt.figure(figsize=(10, 6))
+        plt.imshow(processed_img, cmap='gray')
+        plt.title("Preprocessed Image")
+        plt.show()
+    else:
+        processed_img = original_img
+    
+    img_resized, scale, top_pad, left_pad, _, _ = resize_with_padding(processed_img, input_size)
+    
+    if len(img_resized.shape) == 2: 
+        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_GRAY2RGB)
+    else:
+        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+        
+    img_normalized = img_rgb.astype(np.float32) / 255.0
+    img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
+    
+    with torch.no_grad():
+        score, geo = model(img_tensor)
+    
+    score_np = score.squeeze().cpu().numpy()
+    geo_np = geo.squeeze().cpu().numpy()
+    
+    boxes, scores = decode_bounding_boxes(score_np, geo_np)
+    if len(boxes) == 0:
+        print("No text regions detected")
+        return original_img, []
+        
+    nms_boxes = non_maximum_suppression(boxes, scores)
+    
+    scaled_boxes = []
+    for x1, y1, x2, y2 in nms_boxes:
+        x1 = max(0, int((x1 - left_pad) / scale))
+        y1 = max(0, int((y1 - top_pad) / scale))
+        x2 = min(original_img.shape[1], int((x2 - left_pad) / scale))
+        y2 = min(original_img.shape[0], int((y2 - top_pad) / scale))
+        if x2 > x1 and y2 > y1: 
+            scaled_boxes.append((x1, y1, x2, y2))
+    
+    if show_rois and scaled_boxes:
+        display_roi_images(original_img, scaled_boxes, "EAST Detected Text Regions")
+    
+    reader = easyocr.Reader(['en'])
+    recognized_texts = []
+    
+    for (x1, y1, x2, y2) in scaled_boxes:
+        text_roi = original_img[y1:y2, x1:x2]
+        if text_roi.size == 0:
+            continue
+            
+        result = reader.readtext(text_roi, detail=0)
+        if result:
+            text = ' '.join(result)  
+            recognized_texts.append((x1, y1, x2, y2, text))
+   
+    result_img = original_img.copy()
+    for (x1, y1, x2, y2, text) in recognized_texts:
+        cv2.rectangle(result_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+        cv2.rectangle(
+            result_img,
+            (x1, y1 - text_size[1] - 8),
+            (x1 + text_size[0], y1),
+            (0, 0, 0),
+            -1
+        )
+        
+        cv2.putText(
+            result_img, text, (x1, y1 - 5),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2
+        )
+    
+    print("Detected text:")
+    for i, (_, _, _, _, text) in enumerate(recognized_texts):
+        print(f"{i+1}. {text}")
+    
+    plt.figure(figsize=(15, 10))
+    plt.imshow(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB))
+    plt.title("Detected Text")
+    plt.axis('off')
+    plt.show()
+    
+    cv2.imshow("Detected Text", result_img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    
+    return result_img, [text[-1] for text in recognized_texts]
 
-# plt.figure(figsize=(10, 6))
-# plt.imshow(preprocessed_img, cmap='gray')
-# plt.title("Preprocessed Image")
-# plt.show()
+if __name__ == "__main__":
+    img_path = 'img/img18.jpg'
 
+    result_img, texts = process_image(
+        img_path, 
+        use_preprocessing=False, 
+        show_rois=True  ,                                    
+    )
+    
 
-img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
-img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-img_normalized = img_rgb.astype(np.float32) / 255.0
-img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
-
-with torch.no_grad():
-    score, geo = model(img_tensor)
-
-score_np = score.squeeze().cpu().numpy()
-geo_np = geo.squeeze().cpu().numpy()
-
-boxes, scores = decode_bounding_boxes(score_np, geo_np)
-nms_boxes = non_maximum_suppression(boxes, scores)
-
-# get back to original shape
-scaled_boxes = []
-for x1, y1, x2, y2 in nms_boxes:
-    x1 = int((x1 - left_pad) / scale)
-    y1 = int((y1 - top_pad) / scale)
-    x2 = int((x2 - left_pad) / scale)
-    y2 = int((y2 - top_pad) / scale)
-    scaled_boxes.append((x1, y1, x2, y2))
-
-reader = easyocr.Reader(['en'])
-recognized_texts = []
-for (x1, y1, x2, y2) in scaled_boxes:
-    text_roi = original_img[y1:y2, x1:x2]
-    result = reader.readtext(text_roi, detail=0)
-    if result:
-        recognized_texts.append((x1, y1, x2, y2, result[0]))
-
-for (x1, y1, x2, y2, text) in recognized_texts:
-    cv2.rectangle(original_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    cv2.putText(original_img, text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-print([text[-1] for text in recognized_texts])
-plt.figure(figsize=(15, 10))
-plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
-plt.title("Detected Text")
-plt.show()
-
-cv2.imwrite("text_detection_result.png", original_img)
-cv2.imshow("Detected Text", original_img)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
