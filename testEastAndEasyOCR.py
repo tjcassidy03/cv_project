@@ -105,18 +105,16 @@ with open('signboardTranscriptions.csv', mode='r', encoding='utf-8') as file:
         else:
             transcriptions_and_bbox_hashmap[image_id] = [entry]
 
-for image_id, entries in transcriptions_and_bbox_hashmap.items():
-    print(f"{image_id}:")
-    for entry in entries:
-        print(f"  Transcription: {entry['transcription']}, BBox: {entry['bbox']}")
+# for image_id, entries in transcriptions_and_bbox_hashmap.items():
+#     print(f"{image_id}:")
+#     for entry in entries:
+#         print(f"  Transcription: {entry['transcription']}, BBox: {entry['bbox']}")
 
-all_files = False
-
-if not all_files:
-    img_path = './images/vietsignboard/baker-2.jpg'
+def process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, metrics_list):
     path_key = img_path.split('./images/')[1]
     original_img = cv2.imread(img_path)
 
+    # Preprocessing and resizing
     preprocessed_img = preprocess_image(original_img)
     img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
 
@@ -129,10 +127,10 @@ if not all_files:
 
     score_np = score.squeeze().cpu().numpy()
     geo_np = geo.squeeze().cpu().numpy()
-
     boxes, scores = decode_bounding_boxes(score_np, geo_np)
     nms_boxes = non_maximum_suppression(boxes, scores)
 
+    # Scaling boxes
     scaled_boxes = []
     for x1, y1, x2, y2 in nms_boxes:
         x1 = int((x1 - left_pad) / scale)
@@ -141,8 +139,9 @@ if not all_files:
         y2 = int((y2 - top_pad) / scale)
         scaled_boxes.append((x1, y1, x2, y2))
 
-    reader = easyocr.Reader(['en', 'vi', 'es'])
+    # Text recognition
     recognized_texts = []
+    reader = easyocr.Reader(['en', 'vi', 'es'], gpu=False, verbose=False)
     for (x1, y1, x2, y2) in scaled_boxes:
         text_roi = original_img[y1:y2, x1:x2]
         if text_roi is not None and text_roi.size != 0:
@@ -150,17 +149,9 @@ if not all_files:
         if result:
             recognized_texts.append((x1, y1, x2, y2, result[0]))
 
-    print(f"\nImage: {path_key}")
-    print("OCR Detected Boxes:")
-    for (x1, y1, x2, y2, text) in recognized_texts:
-        print(f"  Text: {text} | BBox: ({x1}, {y1}, {x2}, {y2})")
-
-    print("\nGround Truth Boxes:")
-    for entry in transcriptions_and_bbox_hashmap.get(path_key, []):
-        print(f"  Text: {entry['transcription']} | BBox: {entry['bbox']}")
-
-    import unicodedata
+    # Normalize text
     def normalize_text(text):
+        import unicodedata
         text = text.lower().strip()
         text = unicodedata.normalize('NFD', text)
         text = "".join([ch for ch in text if not unicodedata.combining(ch)])
@@ -174,16 +165,12 @@ if not all_files:
     ocr_words = [normalize_text(word) for word in ocr_words_raw]
     gt_words = [normalize_text(word) for word in gt_words_raw]
 
-    print("\nNormalized OCR Words:", ocr_words)
-    print("Normalized Ground Truth Words:", gt_words)
-
-    exact_matches = [(gt, ocr) for gt in gt_words for ocr in ocr_words if gt == ocr]
-    print("Exact Word Matches:", exact_matches)
-
+    # Word accuracy
     correct_count = sum(1 for word in gt_words if word in ocr_words)
     total_count = len(gt_words)
     total_characters = sum(len(word) for word in gt_words)
 
+    # Partial accuracy
     partial_correct_characters = 0
     used = [False] * len(ocr_words)
     for gt_word in gt_words:
@@ -199,9 +186,7 @@ if not all_files:
     accuracy = (correct_count / total_count) * 100 if total_count else 0
     partial_accuracy = (partial_correct_characters / total_characters) * 100 if total_characters else 0
 
-    print(f"\nExact Accuracy: {accuracy:.2f}%")
-    print(f"Partial Character Accuracy: {partial_accuracy:.2f}%")
-
+    # CER and WER
     def calculate_cer(ref_words, pred_words):
         return Levenshtein.distance("".join(ref_words), "".join(pred_words)) / max(len("".join(ref_words)), 1)
 
@@ -211,9 +196,7 @@ if not all_files:
     cer = calculate_cer(gt_words, ocr_words)
     wer = calculate_wer(gt_words, ocr_words)
 
-    print(f"Character Error Rate (CER): {cer * 100:.2f}%")
-    print(f"Word Error Rate (WER): {wer * 100:.2f}%")
-
+    # IoU Metrics
     def compute_iou(boxA, boxB):
         xA = max(boxA[0], boxB[0])
         yA = max(boxA[1], boxB[1])
@@ -255,116 +238,51 @@ if not all_files:
     recall = TP / (TP + FN) if (TP + FN) > 0 else 0
     hmean = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-    print("\n--- IoU Metrics ---")
-    print(f"True Positives: {TP}")
-    print(f"False Positives: {FP}")
-    print(f"False Negatives: {FN}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
-    print(f"H-Mean: {hmean:.4f}")
+    metrics_list.append({
+        'image': path_key,
+        'accuracy': accuracy,
+        'partial_accuracy': partial_accuracy,
+        'cer': cer * 100,
+        'wer': wer * 100,
+        'tp': TP,
+        'fp': FP,
+        'fn': FN,
+        'precision': precision,
+        'recall': recall,
+        'hmean': hmean
+    })
+
+    print(f"{path_key} - Exact Accuracy: {accuracy:.2f}% | Partial Character Accuracy: {partial_accuracy:.2f}% | CER: {cer * 100:.2f}% | WER: {wer * 100:.2f}% | TP: {TP} | FP: {FP} | FN: {FN} | Precision: {precision:.4f} | Recall: {recall:.4f} | H-Mean: {hmean:.4f}")
 
 
-# elif all_files:
-#     folder_path = './images/vietsignboard'
-#     image_paths = [path.replace('\\', '/') for path in glob(os.path.join(folder_path, '*.jpg'))]
+def calculate_averages(metrics_list):
+    keys = ['accuracy', 'partial_accuracy', 'cer', 'wer', 'precision', 'recall', 'hmean']
+    averages = {key: np.mean([metric[key] for metric in metrics_list]) for key in keys}
+    return averages
 
-#     all_metrics = []
-#     for img_path in image_paths:
-#         original_img = cv2.imread(img_path)
-#         preprocessed_img = preprocess_image(original_img)
-#         img_resized, scale, top_pad, left_pad, new_w, new_h = resize_with_padding(preprocessed_img, input_size)
-#         img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-#         img_normalized = img_rgb.astype(np.float32) / 255.0
-#         img_tensor = torch.from_numpy(img_normalized).permute(2, 0, 1).unsqueeze(0)
+def save_to_csv(metrics_list, averages, output_csv):
+    fieldnames = ['image', 'accuracy', 'partial_accuracy', 'cer', 'wer', 'tp', 'fp', 'fn', 'precision', 'recall', 'hmean']
+    with open(output_csv, mode='w', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for metrics in metrics_list:
+            writer.writerow(metrics)
+        averages['image'] = 'Average'
+        writer.writerow(averages)
 
-#         with torch.no_grad():
-#             score, geo = model(img_tensor)
+all_files = False
+metrics_list = []
 
-#         score_np = score.squeeze().cpu().numpy()
-#         geo_np = geo.squeeze().cpu().numpy()
-#         boxes, scores = decode_bounding_boxes(score_np, geo_np)
-#         nms_boxes = non_maximum_suppression(boxes, scores)
+if not all_files:
+    img_path = './images/vietsignboard/baker-2.jpg'
+    process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, metrics_list)
 
-#         scaled_boxes = []
-#         for x1, y1, x2, y2 in nms_boxes:
-#             x1 = int((x1 - left_pad) / scale)
-#             y1 = int((y1 - top_pad) / scale)
-#             x2 = int((x2 - left_pad) / scale)
-#             y2 = int((y2 - top_pad) / scale)
-#             scaled_boxes.append((x1, y1, x2, y2))
+else:
+    folder_path = './images/vietsignboard'
+    image_paths = [path.replace('\\', '/') for path in glob(os.path.join(folder_path, '*.jpg'))]
 
-#         recognized_texts = []
-#         for (x1, y1, x2, y2) in scaled_boxes:
-#             text_roi = original_img[y1:y2, x1:x2]
-#             reader = easyocr.Reader(['en', 'vi', 'es'], gpu=False, verbose=False)
-#             if text_roi is not None and text_roi.size != 0:
-#                 result = reader.readtext(text_roi, detail=0)
-#             if result:
-#                 recognized_texts.append(result[0])
+    for img_path in image_paths:
+        process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, metrics_list)
 
-#         img_annotations = list(itertools.chain(*[text.split() for text in recognized_texts]))
-
-#         path_key = img_path.split('./images/')[1]
-#         actual_annotations = transcriptions_and_bbox_hashmap.get(path_key, [])
-#         actual_annotations = list(itertools.chain(*[text.split() for text in actual_annotations]))
-
-#         correct_count = 0
-#         total_count = len(actual_annotations)
-#         partial_correct_characters = 0
-#         total_characters = 0
-#         used_recognized = [False] * len(img_annotations)
-
-#         for annotation in actual_annotations:
-#             total_characters += len(annotation)
-#             if annotation in img_annotations:
-#                 correct_count += 1
-
-#             for i, recognized in enumerate(img_annotations):
-#                 if used_recognized[i]:
-#                     continue
-#                 seq_match = difflib.SequenceMatcher(None, annotation, recognized)
-#                 match_length = seq_match.find_longest_match(0, len(annotation), 0, len(recognized)).size
-#                 partial_correct_characters += match_length
-#                 if match_length > 0:
-#                     used_recognized[i] = True
-
-#         accuracy = (correct_count / total_count) * 100 if total_count > 0 else 0
-#         partial_accuracy = (partial_correct_characters / total_characters) * 100 if total_characters > 0 else 0
-
-#         # CER and WER functions
-#         def calculate_cer(reference, recognized):
-#             reference_str = "".join(reference)
-#             recognized_str = "".join(recognized)
-#             if len(reference_str) == 0:
-#                 return 0
-#             lev_distance = Levenshtein.distance(reference_str, recognized_str)
-#             return lev_distance / len(reference_str)
-
-#         def calculate_wer(reference, recognized):
-#             if len(reference) == 0:
-#                 return 0
-#             lev_distance = Levenshtein.distance(reference, recognized)
-#             return lev_distance / len(reference)
-
-#         cer = calculate_cer(actual_annotations, img_annotations) * 100
-#         wer = calculate_wer(actual_annotations, img_annotations) * 100
-
-#         print(f"📄 Image: {os.path.basename(img_path)}")
-#         print(f"   🔹 Exact Accuracy: {accuracy:.2f}%")
-#         print(f"   🔹 Partial Accuracy: {partial_accuracy:.2f}%")
-#         print(f"   🔹 CER: {cer:.2f}%")
-#         print(f"   🔹 WER: {wer:.2f}%\n")
-
-#         all_metrics.append((accuracy, partial_accuracy, cer, wer))
-
-#     # Calculate averages
-#     avg_acc = np.mean([m[0] for m in all_metrics])
-#     avg_partial = np.mean([m[1] for m in all_metrics])
-#     avg_cer = np.mean([m[2] for m in all_metrics])
-#     avg_wer = np.mean([m[3] for m in all_metrics])
-
-#     print("📊 AVERAGE METRICS ACROSS ALL IMAGES:")
-#     print(f"   ✅ Average Exact Accuracy: {avg_acc:.2f}%")
-#     print(f"   ✅ Average Partial Accuracy: {avg_partial:.2f}%")
-#     print(f"   ✅ Average CER: {avg_cer:.2f}%")
-#     print(f"   ✅ Average WER: {avg_wer:.2f}%")
+averages = calculate_averages(metrics_list)
+save_to_csv(metrics_list, averages, 'image_metrics.csv')
