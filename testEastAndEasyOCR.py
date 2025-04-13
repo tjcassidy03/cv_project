@@ -144,6 +144,7 @@ def process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, 
     reader = easyocr.Reader(['en', 'vi', 'es'], gpu=False, verbose=False)
     for (x1, y1, x2, y2) in scaled_boxes:
         text_roi = original_img[y1:y2, x1:x2]
+        result = []
         if text_roi is not None and text_roi.size != 0:
             result = reader.readtext(text_roi, detail=0)
         if result:
@@ -188,10 +189,12 @@ def process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, 
 
     # CER and WER
     def calculate_cer(ref_words, pred_words):
-        return Levenshtein.distance("".join(ref_words), "".join(pred_words)) / max(len("".join(ref_words)), 1)
+        cer = Levenshtein.distance("".join(ref_words), "".join(pred_words)) / max(len("".join(ref_words)), 1)
+        return min(cer, 1.0)  
 
     def calculate_wer(ref_words, pred_words):
-        return Levenshtein.distance(ref_words, pred_words) / max(len(ref_words), 1)
+        wer = Levenshtein.distance(ref_words, pred_words) / max(len(ref_words), 1)
+        return min(wer, 1.0)  
 
     cer = calculate_cer(gt_words, ocr_words)
     wer = calculate_wer(gt_words, ocr_words)
@@ -213,6 +216,7 @@ def process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, 
     gt_boxes = [(x, y, x + w, y + h) for (x, y, w, h) in gt_boxes_raw]
     pred_boxes = [(x1, y1, x2, y2) for (x1, y1, x2, y2, _) in recognized_texts]
 
+    iou_scores = []
     matched_gt, matched_pred = set(), set()
     threshold = 0.1
 
@@ -229,6 +233,9 @@ def process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, 
         if best_iou >= threshold:
             matched_gt.add(best_gt_idx)
             matched_pred.add(i)
+            iou_scores.append(best_iou)
+
+    avg_iou = np.mean(iou_scores) if iou_scores else 0.0
 
     TP = len(matched_pred)
     FP = len(pred_boxes) - TP
@@ -249,26 +256,45 @@ def process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, 
         'fn': FN,
         'precision': precision,
         'recall': recall,
-        'hmean': hmean
+        'hmean': hmean,
+        'avg_iou': avg_iou
     })
 
-    print(f"{path_key} - Exact Accuracy: {accuracy:.2f}% | Partial Character Accuracy: {partial_accuracy:.2f}% | CER: {cer * 100:.2f}% | WER: {wer * 100:.2f}% | TP: {TP} | FP: {FP} | FN: {FN} | Precision: {precision:.4f} | Recall: {recall:.4f} | H-Mean: {hmean:.4f}")
-
+    print(
+        f"{path_key} - EA: {accuracy:.2f}% | "
+        f"PCA: {partial_accuracy:.2f}% | "
+        f"CER: {cer * 100:.2f}% | WER: {wer * 100:.2f}% | "
+        f"IoU: {avg_iou:.4f} | "
+        f"TP: {TP} | FP: {FP} | FN: {FN} | "
+        f"Precision: {precision:.4f} | Recall: {recall:.4f} | H-Mean: {hmean:.4f}"
+    )
 
 def calculate_averages(metrics_list):
-    keys = ['accuracy', 'partial_accuracy', 'cer', 'wer', 'precision', 'recall', 'hmean']
-    averages = {key: np.mean([metric[key] for metric in metrics_list]) for key in keys}
+    keys = [
+        'accuracy', 'partial_accuracy', 'cer', 'wer', 
+        'iou', 'tp', 'fp', 'fn', 
+        'precision', 'recall', 'hmean'
+    ]
+    averages = {}
+    for key in keys:
+        values = [metric[key] for metric in metrics_list if key in metric]
+        averages[key] = np.mean(values) if values else 0
     return averages
 
 def save_to_csv(metrics_list, averages, output_csv):
-    fieldnames = ['image', 'accuracy', 'partial_accuracy', 'cer', 'wer', 'tp', 'fp', 'fn', 'precision', 'recall', 'hmean']
+    fieldnames = [
+        'image', 'accuracy', 'partial_accuracy', 'cer', 'wer',
+        'iou', 'tp', 'fp', 'fn', 
+        'precision', 'recall', 'hmean'
+    ]
     with open(output_csv, mode='w', newline='') as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         for metrics in metrics_list:
-            writer.writerow(metrics)
+            row = {key: metrics.get(key, '') for key in fieldnames}
+            writer.writerow(row)
         averages['image'] = 'Average'
-        writer.writerow(averages)
+        writer.writerow({key: averages.get(key, '') for key in fieldnames})
 
 all_files = False
 metrics_list = []
@@ -285,4 +311,4 @@ else:
         process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, metrics_list)
 
 averages = calculate_averages(metrics_list)
-save_to_csv(metrics_list, averages, 'image_metrics.csv')
+save_to_csv(metrics_list, averages, 'eastAndEasyOCRMetrics.csv')
