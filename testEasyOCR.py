@@ -3,6 +3,7 @@ import cv2
 import easyocr
 import csv
 import itertools
+import os
 import difflib
 import Levenshtein
 from glob import glob
@@ -183,7 +184,7 @@ def save_to_csv(metrics_list, averages, output_csv):
         averages['image'] = 'Average'
         writer.writerow({key: averages.get(key, '') for key in fieldnames})
 
-all_files = False
+all_files = True
 metrics_list = []
 
 if not all_files:

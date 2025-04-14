@@ -249,15 +249,17 @@ def process_image(img_path, transcriptions_and_bbox_hashmap, model, input_size, 
         'image': path_key,
         'accuracy': accuracy,
         'partial_accuracy': partial_accuracy,
-        'cer': cer * 100,
-        'wer': wer * 100,
+        'cer': cer,
+        'wer': wer,
+        "iou": avg_iou,
+        "ocr_words": ocr_words,
+        "gt_words": gt_words,
         'tp': TP,
         'fp': FP,
         'fn': FN,
         'precision': precision,
         'recall': recall,
         'hmean': hmean,
-        'avg_iou': avg_iou
     })
 
     print(
@@ -275,9 +277,11 @@ def calculate_averages(metrics_list):
         'iou', 'tp', 'fp', 'fn', 
         'precision', 'recall', 'hmean'
     ]
+    filtered_metrics = [metric for metric in metrics_list if metric.get('iou', 0) >= 0.4]
+    
     averages = {}
     for key in keys:
-        values = [metric[key] for metric in metrics_list if key in metric]
+        values = [metric[key] for metric in filtered_metrics if key in metric]
         averages[key] = np.mean(values) if values else 0
     return averages
 
