@@ -4,8 +4,8 @@ import os
 from craft_text_detector import empty_cuda_cache
 from craft import CRAFTTextDetector
 
-image_dir = 'angled_test'
-output_dir = 'angled_test/craft_output'
+image_dir = 'test_imgs'
+output_dir = 'test_imgs/craft_output'
 bound_types = ['polys', 'boxes']
 
 
