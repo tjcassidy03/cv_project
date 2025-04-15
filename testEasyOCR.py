@@ -163,9 +163,11 @@ def calculate_averages(metrics_list):
         'iou', 'tp', 'fp', 'fn', 
         'precision', 'recall', 'hmean'
     ]
+    filtered_metrics = [metric for metric in metrics_list if metric.get('iou', 0) >= 0.4]
+    
     averages = {}
     for key in keys:
-        values = [metric[key] for metric in metrics_list if key in metric]
+        values = [metric[key] for metric in filtered_metrics if key in metric]
         averages[key] = np.mean(values) if values else 0
     return averages
 
