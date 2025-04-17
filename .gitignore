@@ -27,6 +27,9 @@ Thumbs.db
 *.jpg
 *.png
 
+*.json
+*.csv
+
 img/
 test_imgs/
 craft_output/
