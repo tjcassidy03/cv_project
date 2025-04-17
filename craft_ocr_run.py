@@ -276,7 +276,9 @@ def process_single_image(image_path, transcriptions_and_bbox_hashmap, metrics_li
 
     # SOMETHING WRONG WITH GETTING GT LABELS INTO THE LIST
 
+
     # IoU comparison (CRAFT regions vs GT)
+    print(gt_entries)
     ious = []
     for gt in gt_entries:
         print('-')
