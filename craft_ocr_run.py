@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-import easyocr
+from paddleocr import PaddleOCR
 import os
 from shapely.geometry import Polygon
 import csv
@@ -9,12 +9,13 @@ import glob
 import Levenshtein
 import itertools
 import difflib
+import ast
 
 image_dir = 'test_imgs'
 output_dir = 'vietsignboard/craft_output'
 bound_types = ['polys', 'boxes']
 
-reader = easyocr.Reader(['en', 'vi', 'es'], verbose = False)
+ocr = PaddleOCR(use_angle_cls=True, lang='vi') 
 
 transcriptions_and_bbox_hashmap = {}
 
@@ -67,15 +68,29 @@ def calculate_wer(ref_words, pred_words):
     return min(wer, 1.0)
 
 def calc_poly_box_iou(box1, box2):
+    print("BOX1:", box1)
+    print("BOX2:", box2)
+
+    def ensure_bounding_box_format(box):
+        if isinstance(box[0], int):  
+            return [(box[0], box[1]), (box[0], box[3]), (box[2], box[3]), (box[2], box[1])]
+        return box
+    
+    box1 = ensure_bounding_box_format(box1)
+    box2 = ensure_bounding_box_format(box2)
+
+    if len(box1) != 4 or len(box2) != 4:
+        return 0
+
     poly1 = Polygon(box1)
     poly2 = Polygon(box2)
-    
+
     if not poly1.is_valid or not poly2.is_valid:
         return 0.0
-    
+
     intersection = poly1.intersection(poly2).area
     union = poly1.area + poly2.area - intersection
-    
+
     if union == 0:
         return 0.0
     
@@ -186,63 +201,66 @@ def draw_annotations(image, recognized_texts):
     return result_img
 
 def process_single_image(image_path, transcriptions_and_bbox_hashmap, metrics_list):
-    # print(f"Processing image: {image_path}")
     original_img = cv2.imread(image_path)
-    
     if original_img is None:
         print(f"Could not read image: {image_path}")
         return
-    
-    # Extract base name from image path
+
     img_base = os.path.basename(os.path.splitext(image_path)[0])
-    path_key = os.path.basename(image_path)  # For looking up in hashmap
-    
+    path_key = 'vietsignboard/' + os.path.basename(image_path)
+    print("Path key: ", path_key)
+
     boxes_out_path = os.path.join(output_dir, img_base, 'boxes')
     polys_out_path = os.path.join(output_dir, img_base, 'polys')
-    
+
     if not os.path.exists(boxes_out_path) or not os.path.exists(polys_out_path):
         print(f"Missing detection directories for {image_path}. Skipping.")
         return
-    
+
     box_bbox_file = os.path.join(boxes_out_path, 'image_text_detection.txt')
     box_crop_path = os.path.join(boxes_out_path, 'image_crops')
-    
+
     poly_bbox_file = os.path.join(polys_out_path, 'image_text_detection.txt')
-    poly_crop_path = os.path.join(polys_out_path, 'image_crops')
-    
+    poly_crop_path = os.path.join(polys_out_path, 'image_crops').replace("\\", "/")
+
     box_regions = load_regions_from_file(box_bbox_file)
-    if not box_regions:
-        print(f"No box regions found for {image_path}")
-        
     poly_regions = load_regions_from_file(poly_bbox_file)
-    if not poly_regions:
-        print(f"No poly regions found for {image_path}")
-    
+
     regions_to_use = determine_regions_to_use(poly_regions, box_regions)
-    
+
     recognized_texts = []
-    for region_type, region_idx in regions_to_use:
+
+    for region_type, idx in regions_to_use:
         if region_type == 'box':
-            crop_file = os.path.join(box_crop_path, f"crop_{region_idx}.png")
-            points = box_regions[region_idx]
-        else:  # poly
-            crop_file = os.path.join(poly_crop_path, f"crop_{region_idx}.png")
-            points = poly_regions[region_idx]
-        
-        crop_img = cv2.imread(crop_file)
-        if crop_img is None:
-            print(f"Could not read crop image: {crop_file}")
+            crop_dir = box_crop_path
+            region_points = box_regions[idx]
+        else:
+            crop_dir = poly_crop_path
+            region_points = poly_regions[idx]
+
+        crop_filename = f"crop_{idx}.png"
+        crop_filepath = os.path.join(crop_dir, crop_filename).replace("\\", "/")
+
+        if not os.path.exists(crop_filepath):
+            print(f"Missing crop image: {crop_filepath}")
             continue
 
-        preprocessed_img = preprocess_crop(crop_img)
-        results = reader.readtext(preprocessed_img)
-        
-        for (bbox, text, conf) in results:
-            recognized_texts.append((points, text, conf, region_type))
-    
-    if not recognized_texts:
-        print(f"No text regions found for {image_path}")
-        return
+        crop_img = cv2.imread(crop_filepath)
+        if crop_img is None:
+            print(f"Could not load crop image: {crop_filepath}")
+            continue
+
+        # preprocessed_img = preprocess_crop(crop_img)
+        results = ocr.ocr(crop_img, cls=True)
+        # print("OCR Results:", results)
+
+        for result in results:
+            if result: 
+                for line in result:
+                    text = line[1][0]  
+                    confidence = line[1][1] 
+                    print(f"Text: {text}, Confidence: {confidence}")
+                    recognized_texts.append((region_points, text, confidence, region_type))
 
     ocr_words_raw = list(itertools.chain(*[text.split() for (_,  text, _, _) in recognized_texts]))
     gt_entries = transcriptions_and_bbox_hashmap.get(path_key, [])
@@ -272,10 +290,6 @@ def process_single_image(image_path, transcriptions_and_bbox_hashmap, metrics_li
 
     cer = calculate_cer(gt_words, ocr_words)
     wer = calculate_wer(gt_words, ocr_words)
-
-
-    # SOMETHING WRONG WITH GETTING GT LABELS INTO THE LIST
-
 
     # IoU comparison (CRAFT regions vs GT)
     print(gt_entries)
@@ -326,7 +340,7 @@ def process_single_image(image_path, transcriptions_and_bbox_hashmap, metrics_li
         f"TP: {tp} | FP: {fp} | FN: {fn} | "
         f"Precision: {precision:.4f} | Recall: {recall:.4f} | H-Mean: {hmean:.4f}"
     )
-    
+
     result_img = draw_annotations(original_img, recognized_texts)
     
     output_img_path = os.path.join(output_dir, f"{img_base}_annotated.jpg")
@@ -377,7 +391,7 @@ all_files = False
 metrics_list = []
 
 if not all_files:
-    img_path = 'vietsignboard/baker-2.jpg'
+    img_path = './vietsignboard/baker-2.jpg'
     process_single_image(img_path, transcriptions_and_bbox_hashmap, metrics_list)
 
 else:
